@@ -52,6 +52,14 @@ chmod +x ymq-compile.sh
 
 ---
 
+## 🤗 Quantized Models
+
+Pre-compiled, architecture-aware clothing-size variants (XXS, XS, M, L, XL) featuring native Multi-Token Prediction (MTP) support are hosted officially on Hugging Face.
+
+👉 **[Download Presets from the ZeroDigest Hub](https://huggingface.co/zerodigest)**
+
+---
+
 ## 📜 License
 
 This project framework is open-source software licensed under the **MIT License**. It features an absolute liability shield providing software "AS IS", allowing for permissionless distribution, modification, and commercial application while preserving author attribution notices.
