@@ -4,16 +4,27 @@
 # Dynamically assigns per-layer quantization targets based on importance matrix
 # Supports configurable size thresholds, score-based tiering, and full type coverage
 # ==============================================================================
-set -e
+
+set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=xxs|xs|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1]"
+    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=xxs|xs|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1] [--mtp=true|false]"
     exit 1
 fi
 
 IMATRIX_PATH="$1"
 SOURCE_GGUF="$2"
 shift 2
+
+# Validate input files exist before proceeding
+if [ ! -f "$IMATRIX_PATH" ]; then
+    echo "ERROR: Imatrix file not found: $IMATRIX_PATH" >&2
+    exit 1
+fi
+if [ ! -f "$SOURCE_GGUF" ]; then
+    echo "ERROR: Source GGUF file not found: $SOURCE_GGUF" >&2
+    exit 1
+fi
 # Output GGUF saved alongside input Q8 file
 OUTPUT_GGUF_DIR="$(dirname "$SOURCE_GGUF")"
 # run_quant.sh saved in a model-named folder alongside this script
@@ -25,11 +36,22 @@ TINY_THRESHOLD="0.1"
 
 # Auto-detect model architecture from imatrix tensor names.
 # MoE and Hybrid models share the same preset set (both have 'exps' tensors).
-if strings "$IMATRIX_PATH" 2>/dev/null | grep -qi "ffn_down_exps\|ffn_gate_exps\|ffn_up_exps"; then
-    MODEL_ARCH="moe"   # Covers pure MoE and Hybrid (MoE + dense FFN) models
-else
+# Uses { strings ... || true; } | grep to be pipefail-safe while keeping binary-safe piping.
+if ! command -v strings &>/dev/null; then
+    echo "WARNING: 'strings' not found, defaulting architecture to dense" >&2
     MODEL_ARCH="dense"
+else
+    if { strings "$IMATRIX_PATH" 2>/dev/null || true; } | grep -qi "ffn_down_exps\|ffn_gate_exps\|ffn_up_exps"; then
+        MODEL_ARCH="moe"   # Covers pure MoE and Hybrid (MoE + dense FFN) models
+    else
+        MODEL_ARCH="dense"
+    fi
 fi
+
+# Auto-detect MTP (Multi-Token Prediction) architecture.
+# Detection moved to Python where GGUFReader already parses tensor names.
+# Can be overridden via --mtp=true|false on the command line.
+HAS_MTP="auto"
 
 # Preset Set A: Dense models
 apply_dense_preset() {
@@ -46,12 +68,13 @@ apply_dense_preset() {
 # Preset Set B: MoE / Hybrid models (exps-based architectures)
 apply_moe_preset() {
     case "$1" in
+        xxxs)PRESET_NAME="XXXS";INPUT_TARGET="Q3_K"; COPY_TARGET="Q4_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_XXS"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XXS"; DEFAULT_TARGET="IQ1_M" ;;
         xxs) PRESET_NAME="XXS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q4_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_XXS"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XXS"; DEFAULT_TARGET="IQ2_XXS" ;;
         xs)  PRESET_NAME="XS";  INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_XS";   MID_TARGET="IQ3_XS"; LOW_TARGET="IQ2_S";  DEFAULT_TARGET="IQ2_XXS" ;;
         m)   PRESET_NAME="M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL";   MID_TARGET="IQ3_S"; LOW_TARGET="IQ2_S";  DEFAULT_TARGET="IQ2_XS" ;;
         l)   PRESET_NAME="L";   INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q5_K";   MID_TARGET="IQ4_XS";   LOW_TARGET="IQ3_XXS"; DEFAULT_TARGET="IQ2_S" ;;
         xl)  PRESET_NAME="XL";  INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K";   MID_TARGET="IQ4_NL";   LOW_TARGET="IQ3_XS";   DEFAULT_TARGET="IQ3_XXS" ;;
-        *) echo "ERROR: Unknown preset '$1'. Available presets: xxs, xs, m, l, xl" >&2; exit 1 ;;
+        *) echo "ERROR: Unknown preset '$1'. Available presets: xxxs, xxs, xs, m, l, xl" >&2; exit 1 ;;
     esac
 }
 
@@ -90,6 +113,8 @@ while [ "$#" -gt 0 ]; do
         --tiny-threshold=*) TINY_THRESHOLD="${1#*=}"; shift ;;
         --input-target) INPUT_TARGET="$2"; shift 2 ;;
         --input-target=*) INPUT_TARGET="${1#*=}"; shift ;;
+        --mtp) HAS_MTP="$2"; shift 2 ;;
+        --mtp=*) HAS_MTP="${1#*=}"; shift ;;
         *) echo "WARNING: Unknown argument '$1' ignored" >&2; shift ;;
     esac
 done
@@ -97,18 +122,23 @@ done
 echo "YMQ-Compiler: Detected architecture: $MODEL_ARCH | Preset [$PRESET_NAME] targets - INPUT=$INPUT_TARGET, HIGH=$HIGH_TARGET, MID=$MID_TARGET, LOW=$LOW_TARGET, COPY=$COPY_TARGET, TINY=$TINY_TARGET, DEFAULT=$DEFAULT_TARGET"
 
 # Strip .Q8_0 suffix from model name for cleaner output (e.g. model.Q8_0.gguf -> model-YMQ-XXS.gguf)
-MODEL_BASENAME="$(basename "${SOURCE_GGUF%.gguf}")"
-MODEL_BASENAME="${MODEL_BASENAME%.Q8_0}"
+MODEL_BASENAME="${MODEL_NAME%.Q8_0}"
 OUTPUT_GGUF="${OUTPUT_GGUF_DIR}/${MODEL_BASENAME}-YMQ-${PRESET_NAME}.gguf"
 
 echo "YMQ-Compiler: Running adaptive imatrix scan and precision estimation..."
 
 # We capture the standard output containing the multi-line tensor types directly
-QUANT_ARGS=$(python3 - "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" <<EOF
+if ! command -v python3 &>/dev/null; then
+    echo "ERROR: python3 is required but not found in PATH." >&2
+    exit 1
+fi
+
+QUANT_ARGS=$(python3 - "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" "$HAS_MTP" <<EOF
 import re
 import os
 import struct
 import sys
+import math
 from collections import defaultdict
 
 # ==============================================================================
@@ -136,24 +166,30 @@ BPW_MAP = {
     "COPY": 8.5  # COPY preserves original Q8 data, same size as Q8_0
 }
 
-# YMQ Tensor Pattern Normalizer: Maps variant tensor names to canonical base names
+# YMQ Tensor Pattern Normalizer: Maps variant tensor names to canonical base names.
+# Order matters: more specific patterns must come before less specific ones (startswith matching).
 PATTERN_TO_BASE = {
+    # Order matters: more specific patterns MUST come before less specific ones (startswith matching)
     'ffn_down_exps': 'ffn_down',
+    'ffn_gate_exps': 'ffn_gate',
+    'ffn_up_exps': 'ffn_up',
+    'ffn_gate_inp': 'ffn_gate_inp',   # Must precede ffn_gate (startswith)
     'ffn_down': 'ffn_down',
+    'ffn_gate': 'ffn_gate',
+    'ffn_up': 'ffn_up',
     'ssm_out': 'ssm_out',
     'ssm_in': 'ssm_in',
     'attn_output': 'attn_output',
+    'attn_qkv': 'attn_qkv',          # Must precede attn_q (startswith)
+    'attn_gate': 'attn_gate',
     'attn_q': 'attn_q',
     'attn_k': 'attn_k',
     'attn_v': 'attn_v',
-    'attn_qkv': 'attn_qkv',
-    'attn_gate': 'attn_gate',
     'ssm_a': 'ssm_a',
     'ssm_alpha': 'ssm_alpha',
     'ssm_beta': 'ssm_beta',
     'ssm_conv1d': 'ssm_conv1d',
     'ssm_dt': 'ssm_dt',
-    'ffn_gate_inp': 'ffn_gate_inp',
 }
 
 
@@ -245,8 +281,7 @@ def ymq_stage1_analysis(imatrix_path, gguf_path):
         chunk_data = imatrix_data[start_offset:start_offset + 1024]
         floats = []
         for offset in range(0, len(chunk_data) - 4, 4):
-            val_tuple = struct.unpack('<f', chunk_data[offset:offset+4])
-            val = val_tuple[0]
+            val = struct.unpack_from('<f', chunk_data, offset)[0]
             if 0.00001 < abs(val) < 100000.0:
                 floats.append(abs(val))
                 
@@ -317,7 +352,7 @@ def ymq_stage1_analysis(imatrix_path, gguf_path):
 # ==============================================================================
 # YMQ Stage 2: Adaptive Target Assignment & Script Generation
 # ==============================================================================
-def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb):
+def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp):
     """YMQ Core Algorithm: Assign quantization targets dynamically.
 
     Architecture-Agnostic Logic (NO hardcoded array names):
@@ -327,6 +362,7 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     - Small arrays (tiny_threshold - small_threshold GB) -> COPY_TARGET
     - Large arrays (>= small_threshold GB) -> imatrix-scored per-layer targeting
       (FFN metrics for FFN tensors, SSM metrics for SSM tensors, default otherwise)
+    - MTP layers detected generically: layers with FFN tensors but zero imatrix score -> Q3_K
     """
 
     max_layer = data['max_layer']
@@ -340,6 +376,36 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     peak_dense = data['peak_dense']
     peak_ssm = data['peak_ssm']
     avg_ffn = data['avg_ffn']
+
+    # Detect MTP layers generically.
+    # First check if model has nextn.* tensors (MTP architecture indicator).
+    # Then find FFN-only layers beyond max_layer missing from imatrix metrics - those are the MTP companion layers.
+    print(f"DEBUG: Python received has_mtp='{has_mtp}'", file=sys.stderr)
+    
+    mtp_layers = set()
+    nextn_found = False
+    for tensor_name in tensor_element_counts:
+        if 'nextn.' in tensor_name:
+            nextn_found = True
+            break
+    
+    print(f"DEBUG: Found nextn tensors in GGUF: {nextn_found}", file=sys.stderr)
+    
+    # MTP is enabled either by bash flag or auto-detected from GGUF tensor names
+    if has_mtp.lower() == "true" or (has_mtp.lower() == "auto" and nextn_found):
+        print(f"DEBUG: Scanning for FFN layers missing imatrix data...", file=sys.stderr)
+        ffn_layer_nums = set()
+        for tensor_name in tensor_element_counts:
+            match = re.match(r'blk\.(\d+)\.(ffn_down|ffn_gate|ffn_up)\.weight$', tensor_name)
+            if match:
+                layer_num = int(match.group(1))
+                ffn_layer_nums.add(layer_num)
+        
+        # Only mark FFN layers BEYOND max_layer as MTP.
+        # Layers within range but missing from imatrix (e.g., L34) are just parsing gaps, not true MTP.
+        for layer_num in ffn_layer_nums:
+            if layer_num > max_layer and layer_num not in layer_ffn_metrics:
+                mtp_layers.add(layer_num)
 
     INPUT_TARGET = input_target     # For token_embd.weight (input embedding)
     HIGH_TARGET = high_target       # For highest-scoring layers (>= 70% of peak)
@@ -465,7 +531,11 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
         # All other arrays have no imatrix data
         return None, None, 0.0
 
-    target_rank = {INPUT_TARGET: 4.5, HIGH_TARGET: 5, COPY_TARGET: 6, TINY_TARGET: 7, MID_TARGET: 4, LOW_TARGET: 3, DEFAULT_TARGET: 2}
+    # MTP layers should be forced to Q3_K (a safe medium-compression target).
+    # We add Q3_K to the target rank so it can compete with other targets.
+    MTP_TARGET = "Q3_K"
+
+    target_rank = {INPUT_TARGET: 4.5, HIGH_TARGET: 5, COPY_TARGET: 6, TINY_TARGET: 7, MID_TARGET: 4, LOW_TARGET: 3, DEFAULT_TARGET: 2, MTP_TARGET: 3.8}
 
     def get_best_target(current, new_target):
         current_rank = target_rank.get(current, 0)
@@ -505,7 +575,6 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
         array_score_info[base_name] = (layers_dict, metrics_dict, is_partial_coverage)
 
     # --- Step 6b: Calculate tier thresholds using gap detection in log space ---
-    import math
     tier_map = {}
     
     if all_layer_scores:
@@ -592,8 +661,13 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                 elem_count = layers_dict[layer_num]
                 score = metrics_dict.get(layer_num, 0.0)
 
-                tier = tier_map.get(layer_num, 'T4')
-                assigned_target = tier_target[tier]
+                # MTP layer override: force Q3_K for detected MTP layers
+                if layer_num in mtp_layers:
+                    assigned_target = MTP_TARGET
+                    tier_map[layer_num] = 'MTP'
+                else:
+                    tier = tier_map.get(layer_num, 'T4')
+                    assigned_target = tier_target[tier]
 
                 if layer_num in TAPERED_TARGETS:
                     assigned_target = get_best_target(assigned_target, TAPERED_TARGETS[layer_num])
@@ -616,8 +690,13 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                 elem_count = layers_dict[layer_num]
                 score = metrics_dict.get(layer_num, 0.0)
 
-                tier = tier_map.get(layer_num, 'T4')
-                assigned_target = tier_target[tier]
+                # MTP layer override: force Q3_K for detected MTP layers
+                if layer_num in mtp_layers:
+                    assigned_target = MTP_TARGET
+                    tier_map[layer_num] = 'MTP'
+                else:
+                    tier = tier_map.get(layer_num, 'T4')
+                    assigned_target = tier_target[tier]
 
                 if layer_num in TAPERED_TARGETS:
                     assigned_target = get_best_target(assigned_target, TAPERED_TARGETS[layer_num])
@@ -674,6 +753,22 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
             layer_best_target[layer_num] = target
             layer_best_score[layer_num] = score
 
+    # Pre-compute per-layer exps/dense tensor presence from array_layers (O(1) lookup instead of O(n²))
+    layers_with_exps_ffn = set()
+    layers_with_dense_ffn = set()
+    for base_name, layers_dict in array_layers.items():
+        lower_bn = base_name.lower()
+        if not lower_bn.startswith('ffn_'):
+            continue
+        is_exps = 'exps' in lower_bn
+        for ln in layers_dict:
+            if is_exps:
+                layers_with_exps_ffn.add(ln)
+            else:
+                # Only count as dense FFN if it's a core weight (gate/down/up), not gate_inp etc.
+                if lower_bn in ('ffn_gate.weight', 'ffn_down.weight', 'ffn_up.weight'):
+                    layers_with_dense_ffn.add(ln)
+
     # Build layer_assignments from aggregated per-layer data (one entry per layer)
     all_displayed_layers = set(layer_best_target.keys())
     layer_assignments = []
@@ -682,20 +777,8 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
         has_exps = "_exps" in layer_ffn_types
         has_dense = "dense" in layer_ffn_types
 
-        layer_has_exps_tensors = False
-        layer_has_dense_tensors = False
-        for tensor_name in tensor_element_counts:
-            match = re.match(r'blk\.' + str(layer_num) + r'\.(.+)', tensor_name)
-            if match:
-                tname = match.group(1).lower()
-                if 'exps' in tname and tname.startswith('ffn_'):
-                    layer_has_exps_tensors = True
-                elif tname.startswith('ffn_gate.weight') or tname.startswith('ffn_down.weight') or tname.startswith('ffn_up.weight'):
-                    if 'exps' not in tname:
-                        layer_has_dense_tensors = True
-
-        effective_exps = has_exps or layer_has_exps_tensors
-        effective_dense = has_dense or layer_has_dense_tensors
+        effective_exps = has_exps or (layer_num in layers_with_exps_ffn)
+        effective_dense = has_dense or (layer_num in layers_with_dense_ffn)
 
         if effective_exps and effective_dense:
             display_type = "Hybrid"
@@ -714,7 +797,9 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
         # 1. TAPERED/END override if the layer is in those special sets
         # 2. Computed tier from imatrix score gap detection (works for dense/MoE/hybrid)
         # 3. Size class fallback only when no computed tier exists
-        if layer_num in TAPERED_TARGETS:
+        if layer_num in mtp_layers:
+            tier = "MTP"
+        elif layer_num in TAPERED_TARGETS:
             tier = "TAPERED"
         elif layer_num == END_LAYER and layer_num in tapered_end_targets:
             tier = "END"
@@ -856,7 +941,9 @@ def ymq_stage3_visualize(data, target_data):
         
         for layer_num, override_target in array_layer_targets.get(base_name, {}).items():
             override_bpw = BPW_MAP.get(override_target, 4.0)
-            layer_key = f"{layer_num}_{base_name}"
+            # Strip .weight/.bias suffix to match PATTERN_TO_BASE keys stored without suffix
+            base_no_suffix = re.sub(r'\.(weight|bias)$', '', base_name)
+            layer_key = f"{layer_num}_{base_no_suffix}"
             actual_size = layer_dimensions.get(layer_key, weights_per_layer)
             total_bits += actual_size * override_bpw
         
@@ -869,7 +956,8 @@ def ymq_stage3_visualize(data, target_data):
         
         total_elements_for_q8 = weights_per_layer * num_layers_default if weights_per_layer > 0 and num_layers_default > 0 else 0
         for layer_num, override_target in array_layer_targets.get(base_name, {}).items():
-            layer_key = f"{layer_num}_{base_name}"
+            base_no_suffix = re.sub(r'\.(weight|bias)$', '', base_name)
+            layer_key = f"{layer_num}_{base_no_suffix}"
             actual_size = layer_dimensions.get(layer_key, weights_per_layer)
             total_elements_for_q8 += actual_size
         
@@ -992,8 +1080,18 @@ default_target = sys.argv[7] if len(sys.argv) > 7 else "IQ2_XXS"
 small_threshold_gb = sys.argv[8] if len(sys.argv) > 8 else "1.0"
 tiny_threshold_gb = sys.argv[9] if len(sys.argv) > 9 else "0.1"
 
+has_mtp_flag = sys.argv[10] if len(sys.argv) > 10 else "false"
+
+# Validate all quantization targets against known types to catch typos early
+_all_targets = {input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target}
+_invalid = [t for t in _all_targets if t not in BPW_MAP]
+if _invalid:
+    print(f"ERROR: Unknown quantization type(s): {', '.join(sorted(_invalid))}", file=sys.stderr)
+    print(f"Valid types: {', '.join(sorted(BPW_MAP.keys()))}", file=sys.stderr)
+    sys.exit(1)
+
 data = ymq_stage1_analysis(imatrix_path, gguf_path)
-target_data = ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb)
+target_data = ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp_flag)
 ymq_stage3_visualize(data, target_data)
 
 for arg in target_data['cmd_parts']:
@@ -1010,7 +1108,7 @@ cat << EOF > "${OUTPUT_DIR}/run_quant.sh"
 ${QUANT_ARGS}
     "${SOURCE_GGUF}" \\
     "${OUTPUT_GGUF}" \\
-    ${DEFAULT_TARGET}
+    "${DEFAULT_TARGET}"
 EOF
 
 chmod +x "${OUTPUT_DIR}/run_quant.sh"
