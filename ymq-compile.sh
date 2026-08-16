@@ -4,7 +4,6 @@
 # Dynamically assigns per-layer quantization targets based on importance matrix
 # Supports configurable size thresholds, score-based tiering, and full type coverage
 # ==============================================================================
-
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
@@ -56,6 +55,7 @@ HAS_MTP="auto"
 # Preset Set A: Dense models
 apply_dense_preset() {
     case "$1" in
+        xxxs)PRESET_NAME="XXXS";INPUT_TARGET="Q2_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q5_K"; HIGH_TARGET="IQ3_XXS"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
         xxs) PRESET_NAME="XXS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_XS"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_S"; DEFAULT_TARGET="IQ2_XXS" ;;
         xs)  PRESET_NAME="XS";  INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_XXS"; DEFAULT_TARGET="IQ2_S" ;;
         m)   PRESET_NAME="M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q5_K";   MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
