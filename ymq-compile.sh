@@ -659,7 +659,6 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
 
     for base_name, (layers_dict, metrics_dict, is_partial_coverage) in sorted(array_score_info.items()):
         if is_partial_coverage:
-            best_target_for_array = DEFAULT_TARGET
             for layer_num in sorted(layers_dict.keys()):
                 elem_count = layers_dict[layer_num]
                 score = metrics_dict.get(layer_num, 0.0)
@@ -677,7 +676,6 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                 elif layer_num == END_LAYER:
                     assigned_target = get_best_target(assigned_target, END_TARGET)
 
-                best_target_for_array = get_best_target(best_target_for_array, assigned_target)
                 estimated_total_bits += elem_count * BPW_MAP.get(assigned_target, 2.06)
 
                 if layer_num not in layer_best_target:
@@ -687,7 +685,10 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                     layer_best_target[layer_num] = get_best_target(layer_best_target[layer_num], assigned_target)
                     layer_best_score[layer_num] = max(layer_best_score[layer_num], score)
 
-            cmd_parts.append(f"--tensor-type blk.*.{base_name}={best_target_for_array}")
+                # Emit per-layer specific patterns (not a single wildcard).
+                # Layers getting DEFAULT_TARGET are omitted - they fall through to the positional default arg.
+                if assigned_target != DEFAULT_TARGET:
+                    cmd_parts.append(f"--tensor-type blk.{layer_num}.{base_name}={assigned_target}")
         else:
             for layer_num in sorted(layers_dict.keys()):
                 elem_count = layers_dict[layer_num]
