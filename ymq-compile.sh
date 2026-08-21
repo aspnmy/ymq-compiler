@@ -282,7 +282,7 @@ def ymq_stage1_analysis(imatrix_path, gguf_path):
         
         chunk_data = imatrix_data[start_offset:start_offset + 1024]
         floats = []
-        for offset in range(0, len(chunk_data) - 4, 4):
+        for offset in range(0, len(chunk_data) - 3, 4):
             val = struct.unpack_from('<f', chunk_data, offset)[0]
             if 0.00001 < abs(val) < 100000.0:
                 floats.append(abs(val))
@@ -398,16 +398,25 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
         print(f"DEBUG: Scanning for FFN layers missing imatrix data...", file=sys.stderr)
         ffn_layer_nums = set()
         for tensor_name in tensor_element_counts:
-            match = re.match(r'blk\.(\d+)\.(ffn_down|ffn_gate|ffn_up)\.weight$', tensor_name)
+            match = re.match(r'blk\.(\d+)\.(ffn_down|ffn_gate|ffn_up)(?:_exps)?\.weight$', tensor_name)
             if match:
                 layer_num = int(match.group(1))
                 ffn_layer_nums.add(layer_num)
         
-        # Only mark FFN layers BEYOND max_layer as MTP.
-        # Layers within range but missing from imatrix (e.g., L34) are just parsing gaps, not true MTP.
+        # Mark FFN layers beyond the END layer (last layer with a meaningful imatrix score) as MTP.
+        # MTP companion layers typically appear in imatrix with ~0 importance since they
+        # were never calibrated with real token data.
+        mtp_score_epsilon = 1e-6
+        effective_max_layer = max(
+            (ln for ln, s in layer_ffn_metrics.items() if s >= mtp_score_epsilon),
+            default=max_layer
+        )
+        print(f"DEBUG: MTP detection - ffn_layer_nums={sorted(ffn_layer_nums)}", file=sys.stderr)
+        print(f"DEBUG: MTP detection - max_layer={max_layer}, effective_max_layer={effective_max_layer}", file=sys.stderr)
         for layer_num in ffn_layer_nums:
-            if layer_num > max_layer and layer_num not in layer_ffn_metrics:
+            if layer_num > effective_max_layer:
                 mtp_layers.add(layer_num)
+        print(f"DEBUG: MTP layers detected: {sorted(mtp_layers)}", file=sys.stderr)
 
     INPUT_TARGET = input_target     # For token_embd.weight (input embedding)
     HIGH_TARGET = high_target       # For highest-scoring layers (>= 70% of peak)
@@ -548,11 +557,18 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     all_layer_scores = {}
     array_score_info = {}
 
+    ssm_large_arrays = set()  # SSM arrays that will get uniform HIGH_TARGET in Step 6c
+
     for base_name in sorted(large_arrays):
         if is_norm_tensor(base_name):
             continue
         if is_protected_tensor(base_name):
             continue
+
+        # Mamba/SSM arrays: still collect scores (affects tier thresholds) but mark
+        # for uniform HIGH_TARGET assignment in Step 6c, bypassing per-layer tiering.
+        if 'ssm' in base_name.lower():
+            ssm_large_arrays.add(base_name)
 
         layers_dict = array_layers[base_name]
         metrics_dict, ref_peak, avg_val = get_score_source(base_name)
@@ -657,6 +673,21 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     estimated_total_bits = 0
 
     for base_name, (layers_dict, metrics_dict, is_partial_coverage) in sorted(array_score_info.items()):
+        # Mamba/SSM arrays: uniform HIGH_TARGET, bypassing per-layer tiering.
+        if base_name in ssm_large_arrays:
+            for layer_num in layers_dict:
+                elem_count = layers_dict[layer_num]
+                score = metrics_dict.get(layer_num, 0.0)
+                estimated_total_bits += elem_count * BPW_MAP.get(HIGH_TARGET, 2.06)
+                if layer_num not in layer_best_target:
+                    layer_best_target[layer_num] = HIGH_TARGET
+                    layer_best_score[layer_num] = score
+                else:
+                    layer_best_target[layer_num] = get_best_target(layer_best_target[layer_num], HIGH_TARGET)
+                    layer_best_score[layer_num] = max(layer_best_score[layer_num], score)
+            cmd_parts.append(f"--tensor-type blk.*.{base_name}={HIGH_TARGET}")
+            continue
+
         if is_partial_coverage:
             for layer_num in sorted(layers_dict.keys()):
                 elem_count = layers_dict[layer_num]
