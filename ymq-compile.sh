@@ -7,7 +7,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=m1|m2|m3|ex1|xxs|xs|s|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1] [--mtp=true|false]"
+    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=b|w_s|w_m|xxs|xs|s|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1] [--mtp=true|false]"
     exit 1
 fi
 
@@ -56,8 +56,9 @@ HAS_MTP="auto"
 apply_dense_preset() {
     case "$1" in
         b)   PRESET_NAME="BENCHMAXXED";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
-        w_s)   PRESET_NAME="WIDE_S";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ2_S" ;;
-        w_m)   PRESET_NAME="WIDE_M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K"; MID_TARGET="IQ4_NL"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ2_S" ;;
+        w_s)   PRESET_NAME="WIDE_S";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ2_S";  DEFAULT_TARGET="IQ2_S" ;;
+        w_s2)   PRESET_NAME="WIDE_S2";   INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_XS"; TINY_TARGET="IQ4_XS"; HIGH_TARGET="Q5_K"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_XXS";  DEFAULT_TARGET="IQ3_XXS" ;;
+        w_m)   PRESET_NAME="WIDE_M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K"; MID_TARGET="IQ4_NL"; LOW_TARGET="IQ2_S";  DEFAULT_TARGET="IQ2_S" ;;
 
         xxs)PRESET_NAME="XXS";INPUT_TARGET="Q2_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q5_K"; HIGH_TARGET="IQ3_XXS"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
         xs) PRESET_NAME="XS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
@@ -65,13 +66,18 @@ apply_dense_preset() {
         m)   PRESET_NAME="M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q5_K";   MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
         l)   PRESET_NAME="L";   INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K";   MID_TARGET="Q5_K";   LOW_TARGET="IQ4_NL"; DEFAULT_TARGET="IQ3_S" ;;
         xl)  PRESET_NAME="XL";  INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K";   MID_TARGET="Q6_K";   LOW_TARGET="Q5_K";   DEFAULT_TARGET="IQ4_NL" ;;
-        *) echo "ERROR: Unknown preset '$1'. Available presets: m1, m2, m3, xxs, xs, s, m, l, xl" >&2; exit 1 ;;
+        *) echo "ERROR: Unknown preset '$1'. Available presets: b, w_s, w_m, xxs, xs, s, m, l, xl" >&2; exit 1 ;;
     esac
 }
 
 # Preset Set B: MoE / Hybrid models (exps-based architectures)
 apply_moe_preset() {
     case "$1" in
+        b)   PRESET_NAME="BENCHMAXXED";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
+        w_xs)   PRESET_NAME="WIDE_XS";   INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_XS"; TINY_TARGET="IQ4_XS"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ3_XXS";  DEFAULT_TARGET="IQ2_XS" ;;
+        w_s)   PRESET_NAME="WIDE_S";   INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_XS"; TINY_TARGET="IQ4_XS"; HIGH_TARGET="Q5_K"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_XXS";  DEFAULT_TARGET="IQ2_XS" ;;
+        w_m)   PRESET_NAME="WIDE_M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K"; MID_TARGET="IQ4_NL"; LOW_TARGET="IQ2_S";  DEFAULT_TARGET="IQ2_S" ;;
+
         ex1)PRESET_NAME="EX1";INPUT_TARGET="Q5_K"; COPY_TARGET="Q6_K";  TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_XS"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_S"; DEFAULT_TARGET="IQ2_XXS" ;;
         xxs)PRESET_NAME="XXS";INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_NL"; TINY_TARGET="Q6_K"; HIGH_TARGET="IQ2_XS"; MID_TARGET="IQ2_XXS"; LOW_TARGET="IQ2_XXS"; DEFAULT_TARGET="IQ2_XXS" ;;
         xs) PRESET_NAME="XS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
@@ -550,7 +556,12 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     # We add Q3_K to the target rank so it can compete with other targets.
     MTP_TARGET = "Q3_K"
 
-    target_rank = {INPUT_TARGET: 4.5, HIGH_TARGET: 5, COPY_TARGET: 6, TINY_TARGET: 7, MID_TARGET: 4, LOW_TARGET: 3, DEFAULT_TARGET: 2, MTP_TARGET: 3.8}
+    # Build rank dict in priority order (highest first) so that when two targets
+    # share the same name (e.g. xl preset: HIGH==MID=="Q6_K"), the higher rank wins.
+    target_rank = {}
+    for _t, _r in [(TINY_TARGET, 7), (COPY_TARGET, 6), (HIGH_TARGET, 5), (INPUT_TARGET, 4.5), (MID_TARGET, 4), (MTP_TARGET, 3.8), (LOW_TARGET, 3), (DEFAULT_TARGET, 2)]:
+        if _t not in target_rank:
+            target_rank[_t] = _r
 
     def get_best_target(current, new_target):
         current_rank = target_rank.get(current, 0)
@@ -671,12 +682,15 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     # --- Step 6c: Assign targets based on tiers ---
     layer_best_target = {}
     layer_best_score = {}
+    estimated_total_bits = 0
 
     for base_name, (layers_dict, metrics_dict) in sorted(array_score_info.items()):
         # Mamba/SSM arrays: uniform HIGH_TARGET, bypassing per-layer tiering.
         if base_name in ssm_large_arrays:
             for layer_num in layers_dict:
+                elem_count = layers_dict[layer_num]
                 score = metrics_dict.get(layer_num, 0.0)
+                estimated_total_bits += elem_count * BPW_MAP.get(HIGH_TARGET, 2.06)
                 if layer_num not in layer_best_target:
                     layer_best_target[layer_num] = HIGH_TARGET
                     layer_best_score[layer_num] = score
@@ -687,6 +701,7 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
             continue
 
         for layer_num in sorted(layers_dict.keys()):
+            elem_count = layers_dict[layer_num]
             score = metrics_dict.get(layer_num, 0.0)
 
             # MTP layer override: force Q3_K for detected MTP layers
@@ -701,6 +716,8 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                 assigned_target = get_best_target(assigned_target, TAPERED_TARGETS[layer_num])
             elif layer_num == END_LAYER:
                 assigned_target = get_best_target(assigned_target, END_TARGET)
+
+            estimated_total_bits += elem_count * BPW_MAP.get(assigned_target, 2.06)
 
             if layer_num not in layer_best_target:
                 layer_best_target[layer_num] = assigned_target
@@ -821,9 +838,13 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
             'tier': tier
         })
 
+    peak_score = max(v['val'] for v in layer_assignments) if layer_assignments else 0.0
+
     return {
         'cmd_parts': cmd_parts,
+        'estimated_total_bits': estimated_total_bits,
         'layer_assignments': layer_assignments,
+        'peak_score': peak_score,
         'default_target': DEFAULT_TARGET
     }
 
@@ -841,6 +862,7 @@ def ymq_stage3_visualize(data, target_data):
     max_layer = data['max_layer']
     cmd_parts = target_data['cmd_parts']
     layer_assignments = target_data['layer_assignments']
+    peak_score = target_data['peak_score']
     default_target = target_data['default_target']
     
     print("=" * 75, file=sys.stderr)
