@@ -7,7 +7,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=xxs|xs|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1] [--mtp=true|false]"
+    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=m1|m2|m3|ex1|xxs|xs|s|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1] [--mtp=true|false]"
     exit 1
 fi
 
@@ -55,20 +55,23 @@ HAS_MTP="auto"
 # Preset Set A: Dense models
 apply_dense_preset() {
     case "$1" in
+        b)   PRESET_NAME="BENCHMAXXED";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
+        w_s)   PRESET_NAME="WIDE_S";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ2_S" ;;
+        w_m)   PRESET_NAME="WIDE_M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K"; MID_TARGET="IQ4_NL"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ2_S" ;;
+
         xxs)PRESET_NAME="XXS";INPUT_TARGET="Q2_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q5_K"; HIGH_TARGET="IQ3_XXS"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
         xs) PRESET_NAME="XS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
         s)  PRESET_NAME="S";  INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_XXS"; DEFAULT_TARGET="IQ2_S" ;;
         m)   PRESET_NAME="M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q5_K";   MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
         l)   PRESET_NAME="L";   INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K";   MID_TARGET="Q5_K";   LOW_TARGET="IQ4_NL"; DEFAULT_TARGET="IQ3_S" ;;
         xl)  PRESET_NAME="XL";  INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K";   MID_TARGET="Q6_K";   LOW_TARGET="Q5_K";   DEFAULT_TARGET="IQ4_NL" ;;
-        *) echo "ERROR: Unknown preset '$1'. Available presets: xxs, xs, s, m, l, xl" >&2; exit 1 ;;
+        *) echo "ERROR: Unknown preset '$1'. Available presets: m1, m2, m3, xxs, xs, s, m, l, xl" >&2; exit 1 ;;
     esac
 }
 
 # Preset Set B: MoE / Hybrid models (exps-based architectures)
 apply_moe_preset() {
     case "$1" in
-    # Add this to your script's apply_moe_preset() function after the existing cases
         ex1)PRESET_NAME="EX1";INPUT_TARGET="Q5_K"; COPY_TARGET="Q6_K";  TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_XS"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_S"; DEFAULT_TARGET="IQ2_XXS" ;;
         xxs)PRESET_NAME="XXS";INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_NL"; TINY_TARGET="Q6_K"; HIGH_TARGET="IQ2_XS"; MID_TARGET="IQ2_XXS"; LOW_TARGET="IQ2_XXS"; DEFAULT_TARGET="IQ2_XXS" ;;
         xs) PRESET_NAME="XS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
@@ -76,7 +79,7 @@ apply_moe_preset() {
         m)   PRESET_NAME="M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q5_K";   MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
         l)   PRESET_NAME="L";   INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K";   MID_TARGET="Q5_K";   LOW_TARGET="IQ4_NL"; DEFAULT_TARGET="IQ3_S" ;;
         xl)  PRESET_NAME="XL";  INPUT_TARGET="Q4_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K";   MID_TARGET="Q6_K";   LOW_TARGET="Q5_K";   DEFAULT_TARGET="IQ4_NL" ;;
-        *) echo "ERROR: Unknown preset '$1'. Available presets: xxs, xs, s, m, l, xl" >&2; exit 1 ;;
+        *) echo "ERROR: Unknown preset '$1'. Available presets: ex1, xxs, xs, s, m, l, xl" >&2; exit 1 ;;
     esac
 }
 
@@ -135,7 +138,7 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-QUANT_ARGS=$(python3 - "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" "$HAS_MTP" <<EOF
+QUANT_ARGS=$(python3 - "$IMATRIX_PATH" "$SOURCE_GGUF" "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" "$HAS_MTP" <<EOF
 import re
 import os
 import struct
@@ -176,6 +179,9 @@ PATTERN_TO_BASE = {
     'ffn_gate_exps': 'ffn_gate',
     'ffn_up_exps': 'ffn_up',
     'ffn_gate_inp': 'ffn_gate_inp',   # Must precede ffn_gate (startswith)
+    'ffn_down_shexp': 'ffn_down_shexp',
+    'ffn_gate_shexp': 'ffn_gate_shexp',
+    'ffn_up_shexp': 'ffn_up_shexp',
     'ffn_down': 'ffn_down',
     'ffn_gate': 'ffn_gate',
     'ffn_up': 'ffn_up',
@@ -336,7 +342,7 @@ def ymq_stage1_analysis(imatrix_path, gguf_path):
     return {
         'tensor_element_counts': tensor_element_counts,
         'layer_dimensions': layer_dimensions,
-        'imatrix_data': imatrix_data,
+        'has_exps_in_imatrix': b"exps" in imatrix_data,
         'gguf_path': gguf_path,
         'layer_ffn_metrics': layer_ffn_metrics,
         'layer_ssm_metrics': layer_ssm_metrics,
@@ -369,11 +375,9 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
 
     max_layer = data['max_layer']
     tensor_element_counts = data['tensor_element_counts']
-    layer_dimensions = data['layer_dimensions']
     layer_ffn_metrics = data['layer_ffn_metrics']
     layer_ssm_metrics = data['layer_ssm_metrics']
     layer_types = data['layer_types']
-    has_ssm = data['has_ssm']
     peak_moe = data['peak_moe']
     peak_dense = data['peak_dense']
     peak_ssm = data['peak_ssm']
@@ -582,15 +586,12 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
             cmd_parts.append(f"--tensor-type blk.*.{base_name}={DEFAULT_TARGET}")
             continue
 
-        total_expected_layers = max_layer + 1
-        is_partial_coverage = len(layers_dict) < total_expected_layers
-
         for layer_num in layers_dict:
             score = metrics_dict.get(layer_num, 0.0)
             if layer_num not in all_layer_scores or score > all_layer_scores[layer_num]:
                 all_layer_scores[layer_num] = score
 
-        array_score_info[base_name] = (layers_dict, metrics_dict, is_partial_coverage)
+        array_score_info[base_name] = (layers_dict, metrics_dict)
 
     # --- Step 6b: Calculate tier thresholds using gap detection in log space ---
     tier_map = {}
@@ -670,15 +671,12 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     # --- Step 6c: Assign targets based on tiers ---
     layer_best_target = {}
     layer_best_score = {}
-    estimated_total_bits = 0
 
-    for base_name, (layers_dict, metrics_dict, is_partial_coverage) in sorted(array_score_info.items()):
+    for base_name, (layers_dict, metrics_dict) in sorted(array_score_info.items()):
         # Mamba/SSM arrays: uniform HIGH_TARGET, bypassing per-layer tiering.
         if base_name in ssm_large_arrays:
             for layer_num in layers_dict:
-                elem_count = layers_dict[layer_num]
                 score = metrics_dict.get(layer_num, 0.0)
-                estimated_total_bits += elem_count * BPW_MAP.get(HIGH_TARGET, 2.06)
                 if layer_num not in layer_best_target:
                     layer_best_target[layer_num] = HIGH_TARGET
                     layer_best_score[layer_num] = score
@@ -688,65 +686,33 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
             cmd_parts.append(f"--tensor-type blk.*.{base_name}={HIGH_TARGET}")
             continue
 
-        if is_partial_coverage:
-            for layer_num in sorted(layers_dict.keys()):
-                elem_count = layers_dict[layer_num]
-                score = metrics_dict.get(layer_num, 0.0)
+        for layer_num in sorted(layers_dict.keys()):
+            score = metrics_dict.get(layer_num, 0.0)
 
-                # MTP layer override: force Q3_K for detected MTP layers
-                if layer_num in mtp_layers:
-                    assigned_target = MTP_TARGET
-                    tier_map[layer_num] = 'MTP'
-                else:
-                    tier = tier_map.get(layer_num, 'T4')
-                    assigned_target = tier_target[tier]
+            # MTP layer override: force Q3_K for detected MTP layers
+            if layer_num in mtp_layers:
+                assigned_target = MTP_TARGET
+                tier_map[layer_num] = 'MTP'
+            else:
+                tier = tier_map.get(layer_num, 'T4')
+                assigned_target = tier_target[tier]
 
-                if layer_num in TAPERED_TARGETS:
-                    assigned_target = get_best_target(assigned_target, TAPERED_TARGETS[layer_num])
-                elif layer_num == END_LAYER:
-                    assigned_target = get_best_target(assigned_target, END_TARGET)
+            if layer_num in TAPERED_TARGETS:
+                assigned_target = get_best_target(assigned_target, TAPERED_TARGETS[layer_num])
+            elif layer_num == END_LAYER:
+                assigned_target = get_best_target(assigned_target, END_TARGET)
 
-                estimated_total_bits += elem_count * BPW_MAP.get(assigned_target, 2.06)
+            if layer_num not in layer_best_target:
+                layer_best_target[layer_num] = assigned_target
+                layer_best_score[layer_num] = score
+            else:
+                layer_best_target[layer_num] = get_best_target(layer_best_target[layer_num], assigned_target)
+                layer_best_score[layer_num] = max(layer_best_score[layer_num], score)
 
-                if layer_num not in layer_best_target:
-                    layer_best_target[layer_num] = assigned_target
-                    layer_best_score[layer_num] = score
-                else:
-                    layer_best_target[layer_num] = get_best_target(layer_best_target[layer_num], assigned_target)
-                    layer_best_score[layer_num] = max(layer_best_score[layer_num], score)
-
-                # Emit per-layer specific patterns (not a single wildcard).
-                # Layers getting DEFAULT_TARGET are omitted - they fall through to the positional default arg.
-                if assigned_target != DEFAULT_TARGET:
-                    cmd_parts.append(f"--tensor-type blk.{layer_num}.{base_name}={assigned_target}")
-        else:
-            for layer_num in sorted(layers_dict.keys()):
-                elem_count = layers_dict[layer_num]
-                score = metrics_dict.get(layer_num, 0.0)
-
-                # MTP layer override: force Q3_K for detected MTP layers
-                if layer_num in mtp_layers:
-                    assigned_target = MTP_TARGET
-                    tier_map[layer_num] = 'MTP'
-                else:
-                    tier = tier_map.get(layer_num, 'T4')
-                    assigned_target = tier_target[tier]
-
-                if layer_num in TAPERED_TARGETS:
-                    assigned_target = get_best_target(assigned_target, TAPERED_TARGETS[layer_num])
-                elif layer_num == END_LAYER:
-                    assigned_target = get_best_target(assigned_target, END_TARGET)
-
-                if assigned_target != DEFAULT_TARGET:
-                    cmd_parts.append(f"--tensor-type blk.{layer_num}.{base_name}={assigned_target}")
-                estimated_total_bits += elem_count * BPW_MAP.get(assigned_target, 2.06)
-
-                if layer_num not in layer_best_target:
-                    layer_best_target[layer_num] = assigned_target
-                    layer_best_score[layer_num] = score
-                else:
-                    layer_best_target[layer_num] = get_best_target(layer_best_target[layer_num], assigned_target)
-                    layer_best_score[layer_num] = max(layer_best_score[layer_num], score)
+            # Emit per-layer specific patterns (not a single wildcard).
+            # Layers getting DEFAULT_TARGET are omitted - they fall through to the positional default arg.
+            if assigned_target != DEFAULT_TARGET:
+                cmd_parts.append(f"--tensor-type blk.{layer_num}.{base_name}={assigned_target}")
 
     # Collect ALL applicable targets per layer and pick the finest using get_best_target()
     small_tiny_ffn_layers = {}
@@ -855,13 +821,9 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
             'tier': tier
         })
 
-    peak_score = max(v['val'] for v in layer_assignments) if layer_assignments else 0.0
-
     return {
         'cmd_parts': cmd_parts,
-        'estimated_total_bits': estimated_total_bits,
         'layer_assignments': layer_assignments,
-        'peak_score': peak_score,
         'default_target': DEFAULT_TARGET
     }
 
@@ -877,10 +839,8 @@ def ymq_stage3_visualize(data, target_data):
     layer_ssm_metrics = data['layer_ssm_metrics']
     layer_dimensions = data['layer_dimensions']
     max_layer = data['max_layer']
-    imatrix_data = data['imatrix_data']
     cmd_parts = target_data['cmd_parts']
     layer_assignments = target_data['layer_assignments']
-    peak_score = target_data['peak_score']
     default_target = target_data['default_target']
     
     print("=" * 75, file=sys.stderr)
@@ -923,20 +883,18 @@ def ymq_stage3_visualize(data, target_data):
             return re.sub(r'^blk\.\d+\.', '', tensor_name)
         return tensor_name
     
-    def get_array_weights(base_name):
-        total_elements = 0
-        found_layers = 0
-        
-        for tensor_name, elem_count in tensor_element_counts.items():
+    # Pre-compute per-array element counts (O(n_tensors) once, O(1) lookup per array)
+    array_element_counts = defaultdict(lambda: [0, 0])  # base_name -> [total_elements, layer_count]
+    for tensor_name, elem_count in tensor_element_counts.items():
+        if tensor_name.startswith("blk."):
             cleaned = get_base_array_name(tensor_name)
-            if cleaned == base_name:
-                total_elements += elem_count
-                found_layers += 1
-        
-        if found_layers > 0:
-            return total_elements // found_layers
-        return 0
-    
+            array_element_counts[cleaned][0] += elem_count
+            array_element_counts[cleaned][1] += 1
+
+    def get_array_weights(base_name):
+        total, count = array_element_counts.get(base_name, (0, 0))
+        return total // count if count > 0 else 0
+
     array_layer_targets = defaultdict(dict)
     array_base_targets = {}
     
@@ -950,7 +908,6 @@ def ymq_stage3_visualize(data, target_data):
                 layer_num = int(tensor_name.split("blk.")[1].split(".")[0])
                 array_layer_targets[base_name][layer_num] = target
     
-    total_array_bits = 0
     array_display = {}
     
     for base_name in set(list(array_base_targets.keys()) + list(array_layer_targets.keys())):
@@ -959,12 +916,7 @@ def ymq_stage3_visualize(data, target_data):
         weights_per_layer = get_array_weights(base_name)
         num_layers_with_override = len(array_layer_targets.get(base_name, {}))
         
-        actual_layer_count = 0
-        for tensor_name in tensor_element_counts:
-            cleaned = get_base_array_name(tensor_name)
-            if cleaned == base_name:
-                actual_layer_count += 1
-        
+        actual_layer_count = array_element_counts.get(base_name, (0, 0))[1]
         num_layers_default = actual_layer_count - num_layers_with_override
         
         total_bits = 0
@@ -1007,7 +959,6 @@ def ymq_stage3_visualize(data, target_data):
         
         actual_layer_count = num_layers_with_override + num_layers_default
         array_display[base_name] = (actual_layer_count, total_bits, display_target, q8_bits, avg_score)
-        total_array_bits += total_bits
     
     print("", file=sys.stderr)
     print("=" * 115, file=sys.stderr)
@@ -1070,7 +1021,7 @@ def ymq_stage3_visualize(data, target_data):
         total_bits_from_tensors += bits
         target_bits[assigned_target] += bits
     
-    overhead_factor = 1.06 if b"exps" in imatrix_data else 1.05
+    overhead_factor = 1.06 if data.get('has_exps_in_imatrix', False) else 1.05
     estimated_gb = (total_bits_from_tensors * overhead_factor) / (8.0 * 1024.0 * 1024.0 * 1024.0)
     
     print("", file=sys.stderr)
@@ -1101,20 +1052,30 @@ def ymq_stage3_visualize(data, target_data):
 # Main Execution
 # ==============================================================================
 
-imatrix_path = "${IMATRIX_PATH}"
-gguf_path = "${SOURCE_GGUF}"
+imatrix_path = sys.argv[1]
+gguf_path = sys.argv[2]
 
-input_target = sys.argv[1] if len(sys.argv) > 1 else "Q4_K_M"
-high_target = sys.argv[2] if len(sys.argv) > 2 else "Q5_K"
-mid_target = sys.argv[3] if len(sys.argv) > 3 else "IQ4_XS"
-low_target = sys.argv[4] if len(sys.argv) > 4 else "IQ3_S"
-copy_target = sys.argv[5] if len(sys.argv) > 5 else "COPY"
-tiny_target = sys.argv[6] if len(sys.argv) > 6 else "COPY"
-default_target = sys.argv[7] if len(sys.argv) > 7 else "IQ2_XXS"
-small_threshold_gb = sys.argv[8] if len(sys.argv) > 8 else "1.0"
-tiny_threshold_gb = sys.argv[9] if len(sys.argv) > 9 else "0.1"
+input_target = sys.argv[3] if len(sys.argv) > 3 else "Q4_K_M"
+high_target = sys.argv[4] if len(sys.argv) > 4 else "Q5_K"
+mid_target = sys.argv[5] if len(sys.argv) > 5 else "IQ4_XS"
+low_target = sys.argv[6] if len(sys.argv) > 6 else "IQ3_S"
+copy_target = sys.argv[7] if len(sys.argv) > 7 else "COPY"
+tiny_target = sys.argv[8] if len(sys.argv) > 8 else "COPY"
+default_target = sys.argv[9] if len(sys.argv) > 9 else "IQ2_XXS"
+small_threshold_gb = sys.argv[10] if len(sys.argv) > 10 else "1.0"
+tiny_threshold_gb = sys.argv[11] if len(sys.argv) > 11 else "0.1"
 
-has_mtp_flag = sys.argv[10] if len(sys.argv) > 10 else "false"
+has_mtp_flag = sys.argv[12] if len(sys.argv) > 12 else "false"
+
+# Validate thresholds are valid positive floats
+try:
+    small_threshold_gb_f = float(small_threshold_gb)
+    tiny_threshold_gb_f = float(tiny_threshold_gb)
+    if small_threshold_gb_f <= 0 or tiny_threshold_gb_f <= 0:
+        raise ValueError("Thresholds must be positive")
+except (ValueError, TypeError):
+    print(f"ERROR: Invalid threshold values: small={small_threshold_gb}, tiny={tiny_threshold_gb}", file=sys.stderr)
+    sys.exit(1)
 
 # Validate all quantization targets against known types to catch typos early
 _all_targets = {input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target}
