@@ -7,7 +7,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=b|w_s|w_m|xxs|xs|s|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1] [--mtp=true|false]"
+    echo "Usage: $0 <path_to_imatrix.gguf> <path_to_source_q8_0.gguf> [--preset=b|w_s|w_m|xxs|xs|s|m|l|xl] [--input-target=Q4_K_M] [--high-target=Q5_K] [--mid-target=IQ4_XS] [--low-target=IQ3_S] [--floor-target=IQ2_XXS] [--floor-scale=0.5] [--copy-target=COPY] [--tiny-target=COPY] [--default-target=IQ2_XXS] [--small-threshold=1.0] [--tiny-threshold=0.1] [--mtp=true|false]"
     exit 1
 fi
 
@@ -32,6 +32,8 @@ MODEL_NAME="$(basename "${SOURCE_GGUF%.gguf}")"
 OUTPUT_DIR="${SCRIPT_DIR}/${MODEL_NAME}"
 SMALL_THRESHOLD="1.0"
 TINY_THRESHOLD="0.1"
+FLOOR_TARGET=""
+FLOOR_SCALE="1.0"
 
 # Auto-detect model architecture from imatrix tensor names.
 # MoE and Hybrid models share the same preset set (both have 'exps' tensors).
@@ -60,7 +62,7 @@ apply_dense_preset() {
         w_m)   PRESET_NAME="WIDE_M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q6_K"; MID_TARGET="IQ4_NL"; LOW_TARGET="IQ2_S";  DEFAULT_TARGET="IQ2_S" ;;
 
         xxs)PRESET_NAME="XXS";INPUT_TARGET="Q2_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q5_K"; HIGH_TARGET="IQ3_XXS"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
-        xs-pro)PRESET_NAME="XS-Pro"; INPUT_TARGET="Q2_K"; COPY_TARGET="IQ3_S"; TINY_TARGET="IQ3_S"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ3_XXS";  DEFAULT_TARGET="IQ3_XXS" ;;
+        xs-pro)PRESET_NAME="XS-Pro"; INPUT_TARGET="Q2_K"; COPY_TARGET="IQ3_S"; TINY_TARGET="IQ3_S"; HIGH_TARGET="IQ4_XS"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ3_XXS";  DEFAULT_TARGET="IQ3_XXS" ;;
         xs) PRESET_NAME="XS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
         s-pro)PRESET_NAME="S-Pro"; INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_XS"; TINY_TARGET="IQ4_XS"; HIGH_TARGET="Q5_K"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_XXS";  DEFAULT_TARGET="IQ3_XXS" ;;
         s)  PRESET_NAME="S";  INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_XXS"; DEFAULT_TARGET="IQ2_S" ;;
@@ -81,6 +83,7 @@ apply_moe_preset() {
 
         ex1)PRESET_NAME="EX1";INPUT_TARGET="Q5_K"; COPY_TARGET="Q6_K";  TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_XS"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_S"; DEFAULT_TARGET="IQ2_XXS" ;;
         xxs)PRESET_NAME="XXS";INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_NL"; TINY_TARGET="Q6_K"; HIGH_TARGET="IQ2_XS"; MID_TARGET="IQ2_XXS"; LOW_TARGET="IQ2_XXS"; DEFAULT_TARGET="IQ2_XXS" ;;
+        xs-pro)PRESET_NAME="XS-Pro"; INPUT_TARGET="Q2_K"; COPY_TARGET="IQ3_S"; TINY_TARGET="IQ3_S"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ3_XXS";  DEFAULT_TARGET="IQ3_XXS"; FLOOR_TARGET="IQ2_XXS" ;;
         xs) PRESET_NAME="XS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
         s)  PRESET_NAME="S";  INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ3_XXS"; DEFAULT_TARGET="IQ2_S" ;;
         m)   PRESET_NAME="M";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="Q5_K";   MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
@@ -113,6 +116,8 @@ while [ "$#" -gt 0 ]; do
         --mid-target=*) MID_TARGET="${1#*=}"; shift ;;
         --low-target) LOW_TARGET="$2"; shift 2 ;;
         --low-target=*) LOW_TARGET="${1#*=}"; shift ;;
+        --floor-target) FLOOR_TARGET="$2"; shift 2 ;;
+        --floor-target=*) FLOOR_TARGET="${1#*=}"; shift ;;
         --copy-target) COPY_TARGET="$2"; shift 2 ;;
         --copy-target=*) COPY_TARGET="${1#*=}"; shift ;;
         --tiny-target) TINY_TARGET="$2"; shift 2 ;;
@@ -131,7 +136,9 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-echo "YMQ-Compiler: Detected architecture: $MODEL_ARCH | Preset [$PRESET_NAME] targets - INPUT=$INPUT_TARGET, HIGH=$HIGH_TARGET, MID=$MID_TARGET, LOW=$LOW_TARGET, COPY=$COPY_TARGET, TINY=$TINY_TARGET, DEFAULT=$DEFAULT_TARGET"
+# FLOOR_TARGET is optional; defaults to DEFAULT_TARGET when not specified
+if [ -z "$FLOOR_TARGET" ]; then FLOOR_TARGET="$DEFAULT_TARGET"; fi
+echo "YMQ-Compiler: Detected architecture: $MODEL_ARCH | Preset [$PRESET_NAME] targets - INPUT=$INPUT_TARGET, HIGH=$HIGH_TARGET, MID=$MID_TARGET, LOW=$LOW_TARGET, FLOOR=$FLOOR_TARGET, COPY=$COPY_TARGET, TINY=$TINY_TARGET, DEFAULT=$DEFAULT_TARGET"
 
 # Strip .Q8_0 suffix from model name for cleaner output (e.g. model.Q8_0.gguf -> model-YMQ-XXS.gguf)
 MODEL_BASENAME="${MODEL_NAME%.Q8_0}"
@@ -145,7 +152,7 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-QUANT_ARGS=$(python3 - "$IMATRIX_PATH" "$SOURCE_GGUF" "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" "$HAS_MTP" <<EOF
+QUANT_ARGS=$(python3 - "$IMATRIX_PATH" "$SOURCE_GGUF" "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$FLOOR_TARGET" "$FLOOR_SCALE" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" "$HAS_MTP" <<EOF
 import re
 import os
 import struct
@@ -367,7 +374,7 @@ def ymq_stage1_analysis(imatrix_path, gguf_path):
 # ==============================================================================
 # YMQ Stage 2: Adaptive Target Assignment & Script Generation
 # ==============================================================================
-def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp):
+def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, floor_target, floor_scale, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp):
     """YMQ Core Algorithm: Assign quantization targets dynamically.
 
     Architecture-Agnostic Logic (NO hardcoded array names):
@@ -433,6 +440,8 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     HIGH_TARGET = high_target       # For highest-scoring layers (>= 70% of peak)
     MID_TARGET = mid_target         # For mid-scoring layers (>= 15% of peak)
     LOW_TARGET = low_target         # For low-scoring layers (>= 40% of avg)
+    FLOOR_TARGET = floor_target     # For lowest-scoring layers (T5, below T4 threshold)
+    FLOOR_SCALE = float(floor_scale) if floor_scale else 1.0
     COPY_TARGET = copy_target       # For small arrays (tiny_threshold - small_threshold Q8 size)
     TINY_TARGET = tiny_target       # For tiny arrays (< tiny_threshold Q8 size)
     DEFAULT_TARGET = default_target  # Configurable global default fallback
@@ -560,7 +569,7 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     # Build rank dict in priority order (highest first) so that when two targets
     # share the same name (e.g. xl preset: HIGH==MID=="Q6_K"), the higher rank wins.
     target_rank = {}
-    for _t, _r in [(TINY_TARGET, 7), (COPY_TARGET, 6), (HIGH_TARGET, 5), (INPUT_TARGET, 4.5), (MID_TARGET, 4), (MTP_TARGET, 3.8), (LOW_TARGET, 3), (DEFAULT_TARGET, 2)]:
+    for _t, _r in [(TINY_TARGET, 7), (COPY_TARGET, 6), (HIGH_TARGET, 5), (INPUT_TARGET, 4.5), (MID_TARGET, 4), (MTP_TARGET, 3.8), (LOW_TARGET, 3), (DEFAULT_TARGET, 2), (FLOOR_TARGET, 1)]:
         if _t not in target_rank:
             target_rank[_t] = _r
 
@@ -662,6 +671,38 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                 tier_thresholds.append(median * (1.5 ** (len(tier_thresholds) - 1)))
             tier_thresholds = sorted(tier_thresholds[:3])
 
+        # --- T5 split: further divide the T4 region (below tier_thresholds[0]) using log-space gap detection ---
+        t4_scores = sorted([s for s in all_layer_scores.values() if s < tier_thresholds[0] and s > 0.01])
+        t5_threshold = None
+        if len(t4_scores) >= 4:
+            t4_log_scores = sorted([math.log(s) for s in t4_scores])
+            t4_gaps = []
+            for i in range(1, len(t4_log_scores)):
+                gap_size = t4_log_scores[i] - t4_log_scores[i-1]
+                if i >= 1 and (len(t4_log_scores) - i) >= 1:
+                    t4_gaps.append((gap_size, t4_log_scores[i]))
+            if t4_gaps:
+                t4_gaps_sorted = sorted(t4_gaps, reverse=True)
+                t5_threshold = math.exp(t4_gaps_sorted[0][1])
+            else:
+                t5_threshold = math.exp(t4_log_scores[len(t4_log_scores) // 2])
+        elif len(t4_scores) >= 2:
+            t5_threshold = math.exp(sorted([math.log(s) for s in t4_scores])[len(t4_scores) // 2])
+        else:
+            # Not enough data to split; all T4 layers remain T4
+            t5_threshold = tier_thresholds[0]
+
+        # Apply FLOOR_SCALE: scale the auto-detected threshold relative to tier_thresholds[0]
+        # FLOOR_SCALE=1.0 -> use auto-detected t5_threshold as-is
+        # FLOOR_SCALE=2.0 -> move threshold up (more T5)
+        # FLOOR_SCALE=0.0 -> no T5 split (all stay T4)
+        if FLOOR_SCALE > 0:
+            t5_threshold = t5_threshold * FLOOR_SCALE
+            if t5_threshold >= tier_thresholds[0]:
+                t5_threshold = None
+        else:
+            t5_threshold = None
+
         for layer_num, score in all_layer_scores.items():
             if score >= tier_thresholds[2]:
                 tier_map[layer_num] = 'T1'
@@ -669,6 +710,8 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                 tier_map[layer_num] = 'T2'
             elif score >= tier_thresholds[0]:
                 tier_map[layer_num] = 'T3'
+            elif t5_threshold is not None and score < t5_threshold:
+                tier_map[layer_num] = 'T5'
             else:
                 tier_map[layer_num] = 'T4'
 
@@ -677,7 +720,8 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
         'T1': HIGH_TARGET,
         'T2': MID_TARGET,
         'T3': LOW_TARGET,
-        'T4': DEFAULT_TARGET
+        'T4': DEFAULT_TARGET,
+        'T5': FLOOR_TARGET
     }
 
     # --- Step 6c: Assign targets based on tiers ---
@@ -1082,13 +1126,15 @@ input_target = sys.argv[3] if len(sys.argv) > 3 else "Q4_K_M"
 high_target = sys.argv[4] if len(sys.argv) > 4 else "Q5_K"
 mid_target = sys.argv[5] if len(sys.argv) > 5 else "IQ4_XS"
 low_target = sys.argv[6] if len(sys.argv) > 6 else "IQ3_S"
-copy_target = sys.argv[7] if len(sys.argv) > 7 else "COPY"
-tiny_target = sys.argv[8] if len(sys.argv) > 8 else "COPY"
-default_target = sys.argv[9] if len(sys.argv) > 9 else "IQ2_XXS"
-small_threshold_gb = sys.argv[10] if len(sys.argv) > 10 else "1.0"
-tiny_threshold_gb = sys.argv[11] if len(sys.argv) > 11 else "0.1"
+floor_target = sys.argv[7] if len(sys.argv) > 7 else "IQ2_XXS"
+floor_scale = sys.argv[8] if len(sys.argv) > 8 else "1.0"
+copy_target = sys.argv[9] if len(sys.argv) > 9 else "COPY"
+tiny_target = sys.argv[10] if len(sys.argv) > 10 else "COPY"
+default_target = sys.argv[11] if len(sys.argv) > 11 else "IQ2_XXS"
+small_threshold_gb = sys.argv[12] if len(sys.argv) > 12 else "1.0"
+tiny_threshold_gb = sys.argv[13] if len(sys.argv) > 13 else "0.1"
 
-has_mtp_flag = sys.argv[12] if len(sys.argv) > 12 else "false"
+has_mtp_flag = sys.argv[14] if len(sys.argv) > 14 else "false"
 
 # Validate thresholds are valid positive floats
 try:
@@ -1101,7 +1147,7 @@ except (ValueError, TypeError):
     sys.exit(1)
 
 # Validate all quantization targets against known types to catch typos early
-_all_targets = {input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target}
+_all_targets = {input_target, high_target, mid_target, low_target, floor_target, copy_target, tiny_target, default_target}
 _invalid = [t for t in _all_targets if t not in BPW_MAP]
 if _invalid:
     print(f"ERROR: Unknown quantization type(s): {', '.join(sorted(_invalid))}", file=sys.stderr)
@@ -1109,7 +1155,7 @@ if _invalid:
     sys.exit(1)
 
 data = ymq_stage1_analysis(imatrix_path, gguf_path)
-target_data = ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp_flag)
+target_data = ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, floor_target, floor_scale, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp_flag)
 ymq_stage3_visualize(data, target_data)
 
 for arg in target_data['cmd_parts']:
