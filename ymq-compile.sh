@@ -692,12 +692,12 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
                 elem_count = layers_dict[layer_num]
                 score = metrics_dict.get(layer_num, 0.0)
                 estimated_total_bits += elem_count * BPW_MAP.get(HIGH_TARGET, 2.06)
+                # Only fill gaps — FFN tier assignments take priority for display.
+                # SSM gets uniform HIGH_TARGET via wildcard, so per-layer entries
+                # are already covered; no need to upgrade existing targets.
                 if layer_num not in layer_best_target:
                     layer_best_target[layer_num] = HIGH_TARGET
                     layer_best_score[layer_num] = score
-                else:
-                    layer_best_target[layer_num] = get_best_target(layer_best_target[layer_num], HIGH_TARGET)
-                    layer_best_score[layer_num] = max(layer_best_score[layer_num], score)
             cmd_parts.append(f"--tensor-type blk.*.{base_name}={HIGH_TARGET}")
             continue
 
