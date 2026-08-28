@@ -38,17 +38,102 @@ The compiler features 5 distinct automated clothing-size presets tailored for di
 
 ---
 
+## 📦 Installation
+
+### Prerequisites
+
+| Dependency | Purpose | Required |
+|------------|---------|----------|
+| `python3` (≥ 3.8) | Runs the embedded analysis engine (GGUF header parsing, imatrix scoring) | ✅ Yes |
+| `gguf-py` | Python library for reading GGUF tensor metadata (`from gguf.gguf_reader import GGUFReader`) | ✅ Yes |
+| `llama-quantize` | The llama.cpp quantization binary that performs the actual per-tensor quantization | ✅ Yes |
+| `strings` (binutils) | Architecture auto-detection (MoE vs dense) from imatrix tensor names | ⚠️ Optional — defaults to `dense` if missing |
+
+### 1. Install Python dependencies
+
+```bash
+pip3 install gguf
+```
+
+### 2. Obtain the compiler script
+
+Clone or copy `ymq-compile.sh` into your working directory:
+
+```bash
+git clone <repo-url> ymq-compiler   # or download ymq-compile.sh directly
+cd ymq-compiler
+chmod +x ymq-compile.sh
+```
+
+### 3. Prepare your input files
+
+The compiler expects **two** input files:
+
+| File | Description |
+|------|-------------|
+| `model.imatrix.gguf` | An importance-matrix file generated with `llama-bench -m <model> -im <corpus>` (or your preferred imatrix tool). Must contain per-layer tensor importance scores. |
+| `model.gguf` | The source model in **16-bit** format (`F16`, `BF16`, or `Q8_0`). This is the quantization baseline — the compiler reads its tensor layout and writes the final output alongside it. Higher-precision sources (F16/BF16) yield better results than Q8_0 since they preserve more weight information before per-tensor quantization. |
+
+> **Note:** The script auto-detects whether the model is **Dense** or **MoE/Hybrid** (by inspecting `*_exps` tensor names in the imatrix) and applies the matching preset table automatically. No manual architecture flag needed.
+
+### 4. Place `llama-quantize` on your PATH
+
+The generated `run_quant.sh` invokes `./llama-quantize`, so the binary must be **in the same directory** from which you execute the script (or available via a relative path). A typical setup:
+
+```bash
+# Build llama.cpp once (if not already built)
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp
+cmake -B build && cmake --build build --config Release -j
+export PATH="$(pwd)/build/bin:$PATH"   # or copy llama-quantize next to ymq-compile.sh
+```
+
+### 5. Verify the installation
+
+Run a quick smoke test — the script will print its detected architecture, preset targets, and an estimated output size before writing anything:
+
+```bash
+./ymq-compile.sh \
+    "/path/to/model.imatrix.gguf" \
+    "/path/to/model-bf16.gguf" \
+    --preset m 2>&1 | head -20
+```
+
+If you see a line like:
+
+```
+YMQ-Compiler: Detected architecture: moe | Preset [M] targets - INPUT=Q3_K, HIGH=Q5_K, ...
+```
+
+the installation is working correctly.
+
+---
+
 ## 🚀 Execution & Command-Line Usage
 
 The automation script is a drop-in compiler wrapper tool. Pass your `.imatrix` file data log and target preset straight through the launcher switch flags:
 
 ```bash
-chmod +x ymq-compile.sh
 ./ymq-compile.sh \
     "/path/to/model.imatrix.gguf" \
-    "/path/to/raw_model_bf16.gguf" \
+    "/path/to/model.gguf" \
     --preset m
 ```
+
+The script **does not** run quantization directly. Instead it:
+
+1. Parses the GGUF tensor layout and imatrix importance profiles.
+2. Assigns per-tensor quantization targets (high/mid/low/floor tiers).
+3. Writes a ready-to-run `run_quant.sh` into a model-named subdirectory (`<MODEL_NAME>/run_quant.sh`).
+
+To actually produce the quantized GGUF, execute the generated script from the directory containing your `llama-quantize` binary:
+
+```bash
+cd <MODEL_NAME>/
+./run_quant.sh
+```
+
+The final output is written as `<model>-YMQ-<PRESET>.gguf` in the same directory as the source 16-bit file.
 
 ---
 
