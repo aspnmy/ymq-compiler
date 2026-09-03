@@ -34,6 +34,8 @@ SMALL_THRESHOLD="1.0"
 TINY_THRESHOLD="0.1"
 FLOOR_TARGET=""
 FLOOR_SCALE="1.0"
+FALLBACK_TARGET="IQ4_NL"  # Fallback target for uncovered tensors
+PER_LAYER_TOKEN_EMBD_TARGET="IQ4_NL"  # Special target for per_layer_token_embd.weight
 
 # Auto-detect model architecture from imatrix tensor names.
 # MoE and Hybrid models share the same preset set (both have 'exps' tensors).
@@ -80,7 +82,7 @@ apply_moe_preset() {
     case "$1" in
         b)   PRESET_NAME="BENCHMAXXED";   INPUT_TARGET="Q3_K"; COPY_TARGET="Q6_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ4_NL"; MID_TARGET="IQ4_XS"; LOW_TARGET="IQ3_S";  DEFAULT_TARGET="IQ3_XXS" ;;
 
-        xxs-pro)PRESET_NAME="XXS-Pro"; INPUT_TARGET="Q2_K"; COPY_TARGET="IQ3_S"; TINY_TARGET="IQ3_S"; HIGH_TARGET="IQ2_S"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS";  DEFAULT_TARGET="IQ2_XS"; FLOOR_TARGET="IQ2_XXS"; FLOOR_SCALE="1.5" ;;
+        xxs-pro)PRESET_NAME="XXS-Pro"; INPUT_TARGET="Q2_K"; COPY_TARGET="IQ3_S"; TINY_TARGET="IQ3_S"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ3_XXS"; LOW_TARGET="IQ2_XS";  DEFAULT_TARGET="IQ2_XS"; FLOOR_TARGET="IQ2_XXS"; FLOOR_SCALE="1.5" ;;
         xxs)PRESET_NAME="XXS";INPUT_TARGET="Q2_K"; COPY_TARGET="IQ4_NL"; TINY_TARGET="Q6_K"; HIGH_TARGET="IQ2_XS"; MID_TARGET="IQ2_XXS"; LOW_TARGET="IQ2_XXS"; DEFAULT_TARGET="IQ2_XXS" ;;
         xs-pro)PRESET_NAME="XS-Pro"; INPUT_TARGET="Q2_K"; COPY_TARGET="IQ3_S"; TINY_TARGET="IQ3_S"; HIGH_TARGET="IQ4_XS"; MID_TARGET="IQ3_S"; LOW_TARGET="IQ2_S";  DEFAULT_TARGET="IQ2_XS"; FLOOR_TARGET="IQ2_XXS"; FLOOR_SCALE="1.5" ;;
         xs) PRESET_NAME="XS"; INPUT_TARGET="Q3_K"; COPY_TARGET="Q5_K"; TINY_TARGET="Q8_0"; HIGH_TARGET="IQ3_S"; MID_TARGET="IQ2_S"; LOW_TARGET="IQ2_XS"; DEFAULT_TARGET="IQ2_XS" ;;
@@ -135,6 +137,10 @@ while [ "$#" -gt 0 ]; do
         --tiny-threshold=*) TINY_THRESHOLD="${1#*=}"; shift ;;
         --input-target) INPUT_TARGET="$2"; shift 2 ;;
         --input-target=*) INPUT_TARGET="${1#*=}"; shift ;;
+        --fallback-target) FALLBACK_TARGET="$2"; shift 2 ;;
+        --fallback-target=*) FALLBACK_TARGET="${1#*=}"; shift ;;
+        --per-layer-token-embd-target) PER_LAYER_TOKEN_EMBD_TARGET="$2"; shift 2 ;;
+        --per-layer-token-embd-target=*) PER_LAYER_TOKEN_EMBD_TARGET="${1#*=}"; shift ;;
         --mtp) HAS_MTP="$2"; shift 2 ;;
         --mtp=*) HAS_MTP="${1#*=}"; shift ;;
         *) echo "WARNING: Unknown argument '$1' ignored" >&2; shift ;;
@@ -143,7 +149,7 @@ done
 
 # FLOOR_TARGET is optional; defaults to DEFAULT_TARGET when not specified
 if [ -z "$FLOOR_TARGET" ]; then FLOOR_TARGET="$DEFAULT_TARGET"; fi
-echo "YMQ-Compiler: Detected architecture: $MODEL_ARCH | Preset [$PRESET_NAME] targets - INPUT=$INPUT_TARGET, HIGH=$HIGH_TARGET, MID=$MID_TARGET, LOW=$LOW_TARGET, FLOOR=$FLOOR_TARGET, COPY=$COPY_TARGET, TINY=$TINY_TARGET, DEFAULT=$DEFAULT_TARGET"
+echo "YMQ-Compiler: Detected architecture: $MODEL_ARCH | Preset [$PRESET_NAME] targets - INPUT=$INPUT_TARGET, HIGH=$HIGH_TARGET, MID=$MID_TARGET, LOW=$LOW_TARGET, FLOOR=$FLOOR_TARGET, COPY=$COPY_TARGET, TINY=$TINY_TARGET, DEFAULT=$DEFAULT_TARGET, FALLBACK=$FALLBACK_TARGET, PER_LAYER_TOKEN_EMBD=$PER_LAYER_TOKEN_EMBD_TARGET"
 
 # Strip .Q8_0 suffix from model name for cleaner output (e.g. model.Q8_0.gguf -> model-YMQ-XXS.gguf)
 MODEL_BASENAME="${MODEL_NAME%.Q8_0}"
@@ -157,7 +163,7 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-QUANT_ARGS=$(python3 - "$IMATRIX_PATH" "$SOURCE_GGUF" "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$FLOOR_TARGET" "$FLOOR_SCALE" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" "$HAS_MTP" <<EOF
+QUANT_ARGS=$(python3 - "$IMATRIX_PATH" "$SOURCE_GGUF" "$INPUT_TARGET" "$HIGH_TARGET" "$MID_TARGET" "$LOW_TARGET" "$FLOOR_TARGET" "$FLOOR_SCALE" "$COPY_TARGET" "$TINY_TARGET" "$DEFAULT_TARGET" "$SMALL_THRESHOLD" "$TINY_THRESHOLD" "$HAS_MTP" "$FALLBACK_TARGET" "$PER_LAYER_TOKEN_EMBD_TARGET" <<EOF
 import re
 import os
 import struct
@@ -379,7 +385,7 @@ def ymq_stage1_analysis(imatrix_path, gguf_path):
 # ==============================================================================
 # YMQ Stage 2: Adaptive Target Assignment & Script Generation
 # ==============================================================================
-def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, floor_target, floor_scale, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp):
+def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, floor_target, floor_scale, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp, fallback_target="Q3_K", per_layer_token_embd_target="IQ4_NL"):
     """YMQ Core Algorithm: Assign quantization targets dynamically.
 
     Architecture-Agnostic Logic (NO hardcoded array names):
@@ -511,8 +517,17 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
     # --- Step 3: Build base command parts ---
     cmd_parts = []
 
+    # Special tensor that must come BEFORE token_embd.weight for pattern matching priority
+    cmd_parts.append(f"--tensor-type per_layer_token_embd.weight={per_layer_token_embd_target}")
+
     # Fixed non-layer tensors (token_embd uses INPUT_TARGET, output uses COPY_TARGET)
     cmd_parts.append(f"--tensor-type token_embd.weight={INPUT_TARGET}")
+    
+    # Special output_hc_* tensors that must come BEFORE output.weight for pattern matching priority
+    cmd_parts.append(f"--tensor-type output_hc_norm.weight={fallback_target}")
+    cmd_parts.append(f"--tensor-type output_hc_down.weight={fallback_target}")
+    cmd_parts.append(f"--tensor-type output_hc_up.weight={fallback_target}")
+    
     cmd_parts.append(f"--tensor-type output.weight={COPY_TARGET}")
     for p in f32_tensors:
         cmd_parts.append(f"--tensor-type {p}=F32")
@@ -888,6 +903,58 @@ def ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_t
             'tier': tier
         })
 
+    # --- Step 7: Coverage Check - Add fallback targets for uncovered tensors ---
+    # Check if each tensor has coverage in cmd_parts, if not add FALLBACK_TARGET
+    tensor_element_counts = data['tensor_element_counts']
+    
+    import re as _re
+    
+    def is_tensor_covered(tensor_name):
+        """Check if a tensor name is already covered by any pattern in cmd_parts."""
+        for arg in cmd_parts:
+            if not arg.startswith("--tensor-type "):
+                continue
+            pattern = arg[len("--tensor-type "):].split("=")[0]
+            
+            # Convert glob-like pattern to regex
+            pattern_regex = _re.escape(pattern).replace(r'\*', '.*')
+            
+            if _re.match(pattern_regex, tensor_name):
+                return True
+        return False
+    
+    # Find uncovered tensors and add fallback target using wildcards where possible
+    uncovered_tensors = []
+    for tensor_name in tensor_element_counts.keys():
+        if not is_tensor_covered(tensor_name):
+            uncovered_tensors.append(tensor_name)
+    
+    if uncovered_tensors:
+        # Group by base pattern to use wildcards
+        grouped = defaultdict(list)
+        
+        for tensor_name in uncovered_tensors:
+            # Extract the pattern (replace layer number with *)
+            if tensor_name.startswith("blk."):
+                parts = tensor_name.split(".")
+                if len(parts) >= 3 and parts[1].isdigit():
+                    pattern = f"blk.*.{parts[2]}"
+                else:
+                    pattern = tensor_name
+            else:
+                pattern = tensor_name
+            grouped[pattern].append(tensor_name)
+        
+        # Add wildcard patterns with special handling for per_layer_token_embd
+        for pattern, tensors in grouped.items():
+            if "per_layer_token_embd" in pattern:
+                target = per_layer_token_embd_target
+            else:
+                target = fallback_target
+            cmd_parts.append(f"--tensor-type {pattern}={target}")
+        
+        print(f"DEBUG: Added {len(grouped)} fallback target(s) for uncovered tensors", file=sys.stderr)
+    
     peak_score = max(v['val'] for v in layer_assignments) if layer_assignments else 0.0
 
     return {
@@ -958,10 +1025,10 @@ def ymq_stage3_visualize(data, target_data):
     # Pre-compute per-array element counts (O(n_tensors) once, O(1) lookup per array)
     array_element_counts = defaultdict(lambda: [0, 0])  # base_name -> [total_elements, layer_count]
     for tensor_name, elem_count in tensor_element_counts.items():
-        if tensor_name.startswith("blk."):
-            cleaned = get_base_array_name(tensor_name)
-            array_element_counts[cleaned][0] += elem_count
-            array_element_counts[cleaned][1] += 1
+        # Include all tensors, not just blk.* ones
+        cleaned = get_base_array_name(tensor_name)
+        array_element_counts[cleaned][0] += elem_count
+        array_element_counts[cleaned][1] += 1
 
     def get_array_weights(base_name):
         total, count = array_element_counts.get(base_name, (0, 0))
@@ -979,6 +1046,9 @@ def ymq_stage3_visualize(data, target_data):
             else:
                 layer_num = int(tensor_name.split("blk.")[1].split(".")[0])
                 array_layer_targets[base_name][layer_num] = target
+        else:
+            # Handle non-blk tensors (e.g., output_hc_up.weight, per_layer_token_embd.weight)
+            array_base_targets[base_name] = target
     
     array_display = {}
     
@@ -1140,6 +1210,8 @@ small_threshold_gb = sys.argv[12] if len(sys.argv) > 12 else "1.0"
 tiny_threshold_gb = sys.argv[13] if len(sys.argv) > 13 else "0.1"
 
 has_mtp_flag = sys.argv[14] if len(sys.argv) > 14 else "false"
+fallback_target = sys.argv[15] if len(sys.argv) > 15 else "Q3_K"
+per_layer_token_embd_target = sys.argv[16] if len(sys.argv) > 16 else "IQ4_NL"
 
 # Validate thresholds are valid positive floats
 try:
@@ -1160,9 +1232,8 @@ if _invalid:
     sys.exit(1)
 
 data = ymq_stage1_analysis(imatrix_path, gguf_path)
-target_data = ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, floor_target, floor_scale, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp_flag)
+target_data = ymq_stage2_assign_targets(data, input_target, high_target, mid_target, low_target, floor_target, floor_scale, copy_target, tiny_target, default_target, small_threshold_gb, tiny_threshold_gb, has_mtp_flag, fallback_target, per_layer_token_embd_target)
 ymq_stage3_visualize(data, target_data)
-
 for arg in target_data['cmd_parts']:
     print("    " + arg + " \\\\")
 EOF
